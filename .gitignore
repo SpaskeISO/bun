@@ -2,3 +2,4 @@
 # For other files, use global gitignore.
 *.s3db
 .idea
+.vscode
