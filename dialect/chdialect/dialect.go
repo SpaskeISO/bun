@@ -33,6 +33,7 @@ type Dialect struct {
 	loc                 *time.Location
 	dateTimeInputFormat DateTimeInputFormat // default Basic
 	serialIDNaming      SerialIDNaming      // default table_field
+	jsonSQLType         string              // "JSON" or "String", set in Init
 }
 
 var _ schema.Dialect = (*Dialect)(nil)
@@ -41,9 +42,9 @@ type DialectOption func(d *Dialect)
 
 func New(opts ...DialectOption) *Dialect {
 	d := new(Dialect)
+	d.jsonSQLType = "String" // safe default before Init discovers server version
 	d.tables = schema.NewTables(d)
-	d.features = feature.CTE |
-		feature.TableTruncate |
+	d.features = feature.TableTruncate |
 		feature.TableNotExists |
 		feature.SelectExists |
 		feature.DefaultPlaceholder |
@@ -75,16 +76,20 @@ func (d *Dialect) Init(db *sql.DB) {
 		return
 	}
 
-	// Lightweight UPDATE/DELETE (patch parts) for MergeTree-family tables.
-	if semver.Compare(version, "v25.7") >= 0 {
-		d.features |= feature.UpdateTableAlias | feature.DeleteTableAlias
+	// Subquery CTEs (WITH name AS (SELECT ...)), not scalar-only WITH.
+	if semver.Compare(version, "v20.10") >= 0 {
+		d.features |= feature.CTE
 	}
 
-	// generateSerialID support
+	// generateSerialID() for DEFAULT on auto-increment columns (requires Keeper).
 	if semver.Compare(version, "v25.1") >= 0 {
 		d.features |= feature.AutoIncrement
 	}
 
+	// Native JSON column type (production-ready since 25.3).
+	if semver.Compare(version, "v25.3") >= 0 {
+		d.jsonSQLType = "JSON"
+	}
 }
 
 // cleanupVersion extracts a semver-compatible version from VERSION(), e.g. "26.3.9.8".
@@ -129,7 +134,9 @@ func (d *Dialect) Tables() *schema.Tables {
 }
 
 func (d *Dialect) OnTable(table *schema.Table) {
-	panic("not implemented") // TODO: Implement
+	for _, field := range table.FieldMap {
+		field.DiscoveredSQLType = d.fieldSQLType(field)
+	}
 }
 
 func (d *Dialect) IdentQuote() byte {
