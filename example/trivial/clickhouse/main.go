@@ -23,6 +23,9 @@ type Event struct {
 func main() {
 	ctx := context.Background()
 
+	// DateTimeInputBestEffort emits RFC3339Nano timestamps in SQL; ClickHouse must parse
+	// them with best_effort session settings on the connection (see Settings below).
+	dtFormat := chdialect.DateTimeInputBestEffort
 	conn := clickhouse.OpenDB(&clickhouse.Options{
 		Addr: []string{"localhost:9000"},
 		Auth: clickhouse.Auth{
@@ -30,6 +33,10 @@ func main() {
 			Username: "default",
 			Password: "password",
 		},
+		Settings: clickhouse.Settings(map[string]any{
+			"date_time_input_format":        "best_effort",
+			"cast_string_to_date_time_mode": "best_effort",
+		}),
 	})
 	defer conn.Close()
 
@@ -37,7 +44,7 @@ func main() {
 		panic(fmt.Errorf("ping clickhouse: %w", err))
 	}
 
-	db := bun.NewDB(conn, chdialect.New()).
+	db := bun.NewDB(conn, chdialect.New(chdialect.WithDateTimeInputFormat(dtFormat))).
 		WithQueryHook(bundebug.NewQueryHook(bundebug.WithVerbose(true)))
 
 	var version string
@@ -53,7 +60,7 @@ func main() {
 		CREATE TABLE IF NOT EXISTS events (
 			id Int64,
 			name String,
-			created_at DateTime
+			created_at DateTime64(9, 'UTC')
 		) ENGINE = MergeTree()
 		ORDER BY id
 	`); err != nil {
